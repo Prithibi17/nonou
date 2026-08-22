@@ -1,23 +1,25 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const DEFAULT_SUPABASE_URL = "https://tmtndehzfmolvsslness.supabase.co";
+const DEFAULT_SUPABASE_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRtdG5kZWh6Zm1vbHZzc2xuZXNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc0MDQ5OTUsImV4cCI6MjEwMjk4MDk5NX0.nKtYT97OviFlm4GNrlhPL4nqx2q8pNG9FGJXWwna_ug";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || DEFAULT_SUPABASE_URL;
 const supabaseKey =
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  DEFAULT_SUPABASE_KEY;
 
 export const updateSession = async (request: NextRequest) => {
-  // Create an unmodified response
   let supabaseResponse = NextResponse.next({
     request: {
       headers: request.headers,
     },
   });
 
-  const supabase = createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
-    {
+  try {
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -32,13 +34,14 @@ export const updateSession = async (request: NextRequest) => {
           );
         },
       },
-    }
-  );
+    });
 
-  // IMPORTANT: Avoid writing any logic between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
-  await supabase.auth.getUser();
+    // IMPORTANT: Refresh session if needed
+    await supabase.auth.getUser();
+  } catch (error) {
+    // If Supabase session refresh encounters an issue, continue without crashing middleware
+    console.error("Middleware Supabase updateSession notice:", error);
+  }
 
   return supabaseResponse;
 };
@@ -50,10 +53,8 @@ export const createClient = (request: NextRequest) => {
     },
   });
 
-  const supabase = createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
-    {
+  try {
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll();
@@ -68,8 +69,10 @@ export const createClient = (request: NextRequest) => {
           );
         },
       },
-    }
-  );
-
-  return supabaseResponse;
+    });
+    return { supabase, response: supabaseResponse };
+  } catch (error) {
+    console.error("Middleware createClient notice:", error);
+    return { supabase: null, response: supabaseResponse };
+  }
 };
