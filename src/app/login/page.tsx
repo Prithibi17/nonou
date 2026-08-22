@@ -11,6 +11,8 @@ import {
   ShieldCheck,
   Sparkles,
   AlertCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
@@ -18,6 +20,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -117,13 +120,26 @@ export default function LoginPage() {
             <div className="relative">
               <Lock className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
               <input
-                type="password"
+                type={showPassword ? "text" : "password"}
                 required
                 placeholder="••••••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800/80 pl-10 pr-3.5 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-brand-500 focus:border-transparent"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800/80 pl-10 pr-10 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-brand-500 focus:border-transparent"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-200 focus:outline-none transition-colors"
+                title={showPassword ? "Hide password" : "Show password"}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
             </div>
           </div>
 
