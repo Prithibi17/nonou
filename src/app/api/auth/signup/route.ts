@@ -63,8 +63,11 @@ export async function POST(req: Request) {
       },
       hasOrganization: false,
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Signup error:", error);
-    return NextResponse.json({ error: "Failed to create account" }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || "Failed to create account" },
+      { status: 500 }
+    );
   }
 }
