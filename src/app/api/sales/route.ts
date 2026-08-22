@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getSecurityContext } from "@/lib/auth";
+import { buildPrismaRecordFilter, evaluatePermission } from "@/core/security/permission-engine";
 
 export async function GET(req: Request) {
   try {
@@ -7,17 +9,18 @@ export async function GET(req: Request) {
     const orgId = searchParams.get("orgId");
     const branchId = searchParams.get("branchId");
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "sales", "view")) {
+      return NextResponse.json({ error: "Access Denied: You cannot view sales quotations." }, { status: 403 });
+    }
 
-    const whereClause: any = { organizationId: org.id };
-    if (branchId) whereClause.branchId = branchId;
+    const scopeFilter = buildPrismaRecordFilter(sec, "sales");
+    if (branchId) scopeFilter.branchId = branchId;
 
     const quotations = await prisma.quotation.findMany({
-      where: whereClause,
+      where: scopeFilter,
       include: {
         customer: true,
         lines: {
@@ -28,12 +31,12 @@ export async function GET(req: Request) {
     });
 
     const customers = await prisma.contact.findMany({
-      where: { organizationId: org.id, isCustomer: true },
+      where: { organizationId: sec.organizationId, isCustomer: true },
       select: { id: true, name: true, companyName: true, email: true, phone: true, gstin: true },
     });
 
     const products = await prisma.product.findMany({
-      where: { organizationId: org.id, isActive: true },
+      where: { organizationId: sec.organizationId, isActive: true },
       select: { id: true, name: true, sku: true, sellingPrice: true, taxRate: true, hsnCode: true },
     });
 
@@ -59,14 +62,15 @@ export async function POST(req: Request) {
       branchId,
     } = body;
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "sales", "create")) {
+      return NextResponse.json({ error: "Access Denied: You cannot create quotations." }, { status: 403 });
+    }
 
     // Generate Quotation Number
-    const count = await prisma.quotation.count({ where: { organizationId: org.id } });
+    const count = await prisma.quotation.count({ where: { organizationId: sec.organizationId } });
     const currentYear = new Date().getFullYear();
     const quotationNumber = `QT-${currentYear}-${String(count + 1).padStart(4, "0")}`;
 
@@ -103,8 +107,8 @@ export async function POST(req: Request) {
 
     const quotation = await prisma.quotation.create({
       data: {
-        organizationId: org.id,
-        branchId: branchId || null,
+        organizationId: sec.organizationId,
+        branchId: branchId || sec.branchId || null,
         quotationNumber,
         customerId,
         status: "draft",
@@ -117,6 +121,10 @@ export async function POST(req: Request) {
         totalAmount,
         notes,
         termsAndConditions,
+        ownerUserId: sec.userId,
+        department: sec.department || null,
+        team: sec.team || null,
+        createdById: sec.userId,
         lines: {
           create: processedLines,
         },
@@ -130,12 +138,13 @@ export async function POST(req: Request) {
     // Audit log
     await prisma.auditLog.create({
       data: {
-        organizationId: org.id,
+        organizationId: sec.organizationId,
         recordType: "quotation",
         recordId: quotation.id,
         action: "create",
         fieldName: "quotationNumber",
         newValue: quotation.quotationNumber,
+        userId: sec.userId,
       },
     });
 
@@ -151,6 +160,9 @@ export async function PATCH(req: Request) {
     const body = await req.json();
     const { id, action, status } = body;
 
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const existing = await prisma.quotation.findUnique({
       where: { id },
       include: { lines: true, customer: true },
@@ -158,8 +170,16 @@ export async function PATCH(req: Request) {
 
     if (!existing) return NextResponse.json({ error: "Quotation not found" }, { status: 404 });
 
+    if (!evaluatePermission(sec, "sales", "edit", existing)) {
+      return NextResponse.json({ error: "Access Denied: You cannot modify this quotation." }, { status: 403 });
+    }
+
     // Handle 1-Click Convert to Invoice
     if (action === "convert_to_invoice") {
+      if (!evaluatePermission(sec, "invoices", "create")) {
+        return NextResponse.json({ error: "Access Denied: You do not have permission to create invoices." }, { status: 403 });
+      }
+
       const invCount = await prisma.invoice.count({ where: { organizationId: existing.organizationId } });
       const currentYear = new Date().getFullYear();
       const invoiceNumber = `INV-${currentYear}-${String(invCount + 1).padStart(4, "0")}`;
@@ -188,6 +208,9 @@ export async function PATCH(req: Request) {
           totalAmount: existing.totalAmount,
           amountPaid: 0,
           amountDue: existing.totalAmount,
+          ownerUserId: sec.userId,
+          department: "Finance",
+          createdById: sec.userId,
           notes: `Created from Quotation ${existing.quotationNumber}`,
           lines: {
             create: existing.lines.map((l) => ({
@@ -222,6 +245,7 @@ export async function PATCH(req: Request) {
           action: "converted",
           fieldName: "invoice",
           newValue: invoice.invoiceNumber,
+          userId: sec.userId,
         },
       });
 
@@ -244,6 +268,7 @@ export async function PATCH(req: Request) {
         fieldName: "status",
         oldValue: existing.status,
         newValue: status,
+        userId: sec.userId,
       },
     });
 

@@ -1,19 +1,24 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getSecurityContext } from "@/lib/auth";
+import { buildPrismaRecordFilter, evaluatePermission } from "@/core/security/permission-engine";
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const orgId = searchParams.get("orgId");
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "projects", "view")) {
+      return NextResponse.json({ error: "Access Denied: You cannot view projects." }, { status: 403 });
+    }
+
+    const scopeFilter = buildPrismaRecordFilter(sec, "projects");
 
     const projects = await prisma.project.findMany({
-      where: { organizationId: org.id },
+      where: scopeFilter,
       include: {
         customer: true,
         stages: {
@@ -33,7 +38,7 @@ export async function GET(req: Request) {
     });
 
     const tasks = await prisma.task.findMany({
-      where: { organizationId: org.id },
+      where: { organizationId: sec.organizationId },
       include: {
         project: true,
         stage: true,
@@ -60,14 +65,20 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { type } = body;
 
+    const sec = await getSecurityContext(body.orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     // Create New Task
     if (type === "task") {
-      const { projectId, stageId, title, description, priority, dueDate, estimatedHours, assignedToId, orgId } = body;
-      const org = orgId ? await prisma.organization.findUnique({ where: { id: orgId } }) : await prisma.organization.findFirst();
+      const { projectId, stageId, title, description, priority, dueDate, estimatedHours, assignedToId } = body;
+
+      if (!evaluatePermission(sec, "projects", "create")) {
+        return NextResponse.json({ error: "Access Denied: You cannot create tasks." }, { status: 403 });
+      }
 
       const task = await prisma.task.create({
         data: {
-          organizationId: org!.id,
+          organizationId: sec.organizationId,
           projectId,
           stageId,
           title,
@@ -75,7 +86,10 @@ export async function POST(req: Request) {
           priority: priority || "Medium",
           dueDate: dueDate ? new Date(dueDate) : null,
           estimatedHours: Number(estimatedHours) || 0,
-          assignedToId: assignedToId || null,
+          assignedToId: assignedToId || sec.userId,
+          createdById: sec.userId,
+          department: sec.department || null,
+          team: sec.team || null,
         },
         include: {
           project: true,
@@ -88,17 +102,24 @@ export async function POST(req: Request) {
     }
 
     // Create New Project
-    const { name, code, description, customerId, budget, orgId } = body;
-    const org = orgId ? await prisma.organization.findUnique({ where: { id: orgId } }) : await prisma.organization.findFirst();
+    if (!evaluatePermission(sec, "projects", "create")) {
+      return NextResponse.json({ error: "Access Denied: You cannot create projects." }, { status: 403 });
+    }
+
+    const { name, code, description, customerId, budget } = body;
 
     const project = await prisma.project.create({
       data: {
-        organizationId: org!.id,
+        organizationId: sec.organizationId,
+        branchId: sec.branchId || null,
         name,
         code: code || `PRJ-${Date.now().toString().slice(-4)}`,
         description,
         customerId: customerId || null,
         budget: Number(budget) || 0,
+        managerId: sec.userId,
+        department: sec.department || null,
+        team: sec.team || null,
         stages: {
           create: [
             { name: "Backlog", sequence: 1, color: "#64748b" },
@@ -124,6 +145,16 @@ export async function PATCH(req: Request) {
   try {
     const body = await req.json();
     const { taskId, stageId, status, priority, title } = body;
+
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const existing = await prisma.task.findUnique({ where: { id: taskId } });
+    if (!existing) return NextResponse.json({ error: "Task not found" }, { status: 404 });
+
+    if (!evaluatePermission(sec, "projects", "edit", existing)) {
+      return NextResponse.json({ error: "Access Denied: You cannot edit this task." }, { status: 403 });
+    }
 
     const updatedTask = await prisma.task.update({
       where: { id: taskId },

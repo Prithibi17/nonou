@@ -59,7 +59,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen bg-background text-foreground">
       {/* Universal Modular Sidebar */}
-      <Sidebar />
+      <Sidebar userSession={session} />
 
       {/* Main Content Area */}
       <div className="flex flex-1 flex-col pl-60 min-w-0">

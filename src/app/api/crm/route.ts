@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getSecurityContext } from "@/lib/auth";
+import { buildPrismaRecordFilter, evaluatePermission } from "@/core/security/permission-engine";
 
 export async function GET(req: Request) {
   try {
@@ -7,22 +9,28 @@ export async function GET(req: Request) {
     const orgId = searchParams.get("orgId");
     const branchId = searchParams.get("branchId");
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "crm", "view")) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to view CRM." }, { status: 403 });
+    }
 
     const stages = await prisma.cRMStage.findMany({
-      where: { organizationId: org.id },
+      where: { organizationId: sec.organizationId },
       orderBy: { sequence: "asc" },
     });
 
-    const whereClause: any = { organizationId: org.id };
-    if (branchId) whereClause.branchId = branchId;
+    // Apply 5-dimensional record-level scoping filter (own, team, branch, org)
+    const scopeFilter = buildPrismaRecordFilter(sec, "crm");
+    if (branchId) {
+      scopeFilter.branchId = branchId;
+    }
 
     const leads = await prisma.lead.findMany({
-      where: whereClause,
+      where: scopeFilter,
       include: {
         stage: true,
         assignedTo: {
@@ -65,17 +73,20 @@ export async function POST(req: Request) {
       branchId,
     } = body;
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "crm", "create")) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to create opportunities." }, { status: 403 });
+    }
 
     // Fallback to first stage if not provided
     let finalStageId = stageId;
     if (!finalStageId) {
       const firstStage = await prisma.cRMStage.findFirst({
-        where: { organizationId: org.id },
+        where: { organizationId: sec.organizationId },
         orderBy: { sequence: "asc" },
       });
       finalStageId = firstStage?.id;
@@ -83,8 +94,8 @@ export async function POST(req: Request) {
 
     const lead = await prisma.lead.create({
       data: {
-        organizationId: org.id,
-        branchId: branchId || null,
+        organizationId: sec.organizationId,
+        branchId: branchId || sec.branchId || null,
         name,
         companyName: companyName || null,
         contactName: contactName || null,
@@ -95,7 +106,10 @@ export async function POST(req: Request) {
         expectedRevenue: Number(expectedRevenue) || 0,
         probability: Number(probability) || 10,
         stageId: finalStageId,
-        assignedToId: assignedToId || null,
+        assignedToId: assignedToId || sec.userId,
+        ownerUserId: sec.userId,
+        department: sec.department || null,
+        team: sec.team || null,
         tags: tags || null,
         notes: notes || null,
         expectedClosing: expectedClosing ? new Date(expectedClosing) : null,
@@ -109,12 +123,13 @@ export async function POST(req: Request) {
     // Create Audit Log
     await prisma.auditLog.create({
       data: {
-        organizationId: org.id,
+        organizationId: sec.organizationId,
         recordType: "lead",
         recordId: lead.id,
         action: "create",
         fieldName: "opportunity",
         newValue: lead.name,
+        userId: sec.userId,
       },
     });
 
@@ -132,12 +147,19 @@ export async function PATCH(req: Request) {
 
     if (!id) return NextResponse.json({ error: "Lead ID is required" }, { status: 400 });
 
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const existing = await prisma.lead.findUnique({
       where: { id },
       include: { stage: true },
     });
 
     if (!existing) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+    if (!evaluatePermission(sec, "crm", "edit", existing)) {
+      return NextResponse.json({ error: "Access Denied: You cannot modify this opportunity." }, { status: 403 });
+    }
 
     const updated = await prisma.lead.update({
       where: { id },
@@ -168,6 +190,7 @@ export async function PATCH(req: Request) {
           fieldName: "stage",
           oldValue: existing.stage.name,
           newValue: newStage?.name || stageId,
+          userId: sec.userId,
         },
       });
     }
@@ -184,6 +207,16 @@ export async function DELETE(req: Request) {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) return NextResponse.json({ error: "Lead ID required" }, { status: 400 });
+
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const existing = await prisma.lead.findUnique({ where: { id } });
+    if (!existing) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+
+    if (!evaluatePermission(sec, "crm", "delete", existing)) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to delete this opportunity." }, { status: 403 });
+    }
 
     await prisma.lead.delete({ where: { id } });
     return NextResponse.json({ success: true });

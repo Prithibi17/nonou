@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getSecurityContext } from "@/lib/auth";
+import { buildPrismaRecordFilter, evaluatePermission } from "@/core/security/permission-engine";
 
 export async function GET(req: Request) {
   try {
@@ -7,17 +9,18 @@ export async function GET(req: Request) {
     const orgId = searchParams.get("orgId");
     const branchId = searchParams.get("branchId");
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "invoices", "view")) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to view invoices." }, { status: 403 });
+    }
 
-    const whereClause: any = { organizationId: org.id };
-    if (branchId) whereClause.branchId = branchId;
+    const scopeFilter = buildPrismaRecordFilter(sec, "invoices");
+    if (branchId) scopeFilter.branchId = branchId;
 
     const invoices = await prisma.invoice.findMany({
-      where: whereClause,
+      where: scopeFilter,
       include: {
         customer: true,
         lines: { include: { product: true } },
@@ -27,12 +30,12 @@ export async function GET(req: Request) {
     });
 
     const customers = await prisma.contact.findMany({
-      where: { organizationId: org.id, isCustomer: true },
+      where: { organizationId: sec.organizationId, isCustomer: true },
       select: { id: true, name: true, companyName: true, email: true, phone: true, gstin: true, state: true },
     });
 
     const products = await prisma.product.findMany({
-      where: { organizationId: org.id, isActive: true },
+      where: { organizationId: sec.organizationId, isActive: true },
       select: { id: true, name: true, sku: true, sellingPrice: true, taxRate: true, hsnCode: true },
     });
 
@@ -58,16 +61,17 @@ export async function POST(req: Request) {
       branchId,
     } = body;
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "invoices", "create")) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to create invoices." }, { status: 403 });
+    }
 
     const customer = await prisma.contact.findUnique({ where: { id: customerId } });
 
     // Generate Invoice Number
-    const count = await prisma.invoice.count({ where: { organizationId: org.id } });
+    const count = await prisma.invoice.count({ where: { organizationId: sec.organizationId } });
     const currentYear = new Date().getFullYear();
     const invoiceNumber = `INV-${currentYear}-${String(count + 1).padStart(4, "0")}`;
 
@@ -111,8 +115,8 @@ export async function POST(req: Request) {
 
     const invoice = await prisma.invoice.create({
       data: {
-        organizationId: org.id,
-        branchId: branchId || null,
+        organizationId: sec.organizationId,
+        branchId: branchId || sec.branchId || null,
         invoiceNumber,
         customerId,
         status: "posted",
@@ -127,6 +131,9 @@ export async function POST(req: Request) {
         totalAmount,
         amountPaid: 0,
         amountDue: totalAmount,
+        ownerUserId: sec.userId,
+        department: "Finance",
+        createdById: sec.userId,
         notes,
         terms,
         lines: { create: processedLines },
@@ -141,12 +148,13 @@ export async function POST(req: Request) {
     // Audit Log
     await prisma.auditLog.create({
       data: {
-        organizationId: org.id,
+        organizationId: sec.organizationId,
         recordType: "invoice",
         recordId: invoice.id,
         action: "create",
         fieldName: "invoiceNumber",
         newValue: invoice.invoiceNumber,
+        userId: sec.userId,
       },
     });
 
@@ -162,6 +170,9 @@ export async function PATCH(req: Request) {
     const body = await req.json();
     const { id, action, amount, paymentMethod, referenceNumber, notes, status } = body;
 
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
     const invoice = await prisma.invoice.findUnique({
       where: { id },
       include: { customer: true, payments: true },
@@ -171,8 +182,21 @@ export async function PATCH(req: Request) {
 
     // Handle Record Payment Action
     if (action === "record_payment") {
+      if (!evaluatePermission(sec, "invoices", "edit", invoice)) {
+        return NextResponse.json({ error: "Access Denied: You cannot record payments on this invoice." }, { status: 403 });
+      }
+
       const payAmount = Number(amount) || 0;
       if (payAmount <= 0) return NextResponse.json({ error: "Payment amount must be greater than 0" }, { status: 400 });
+
+      // Check approval limits (e.g. Accountant payment <= ₹50,000)
+      const perm = sec.permissions.find((p) => p.module === "invoices");
+      if (perm?.maxApprovalAmount && payAmount > perm.maxApprovalAmount) {
+        return NextResponse.json(
+          { error: `Payment approval limit exceeded. Your maximum direct payment limit is ₹${perm.maxApprovalAmount.toLocaleString()}. Manager approval required.` },
+          { status: 403 }
+        );
+      }
 
       const payCount = await prisma.payment.count({ where: { organizationId: invoice.organizationId } });
       const paymentNumber = `PAY-${new Date().getFullYear()}-${String(payCount + 1).padStart(4, "0")}`;
@@ -188,6 +212,7 @@ export async function PATCH(req: Request) {
           referenceNumber: referenceNumber || null,
           paymentDate: new Date(),
           notes: notes || null,
+          createdById: sec.userId,
         },
       });
 
@@ -215,13 +240,18 @@ export async function PATCH(req: Request) {
           fieldName: "amountPaid",
           oldValue: `₹${invoice.amountPaid}`,
           newValue: `₹${newAmountPaid}`,
+          userId: sec.userId,
         },
       });
 
       return NextResponse.json({ invoice: updatedInvoice, payment });
     }
 
-    // Direct status update
+    // Direct status update (reversal / cancellation)
+    if (!evaluatePermission(sec, "invoices", "edit", invoice)) {
+      return NextResponse.json({ error: "Access Denied: You cannot edit this invoice." }, { status: 403 });
+    }
+
     const updated = await prisma.invoice.update({
       where: { id },
       data: { status: status || invoice.status },
@@ -232,5 +262,38 @@ export async function PATCH(req: Request) {
   } catch (error) {
     console.error("Invoice PATCH error:", error);
     return NextResponse.json({ error: "Failed to update invoice" }, { status: 500 });
+  }
+}
+
+export async function DELETE(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const id = searchParams.get("id");
+    if (!id) return NextResponse.json({ error: "Invoice ID required" }, { status: 400 });
+
+    const sec = await getSecurityContext();
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const invoice = await prisma.invoice.findUnique({ where: { id } });
+    if (!invoice) return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
+
+    // Financial Record Immutability Enforcement: Posted/Paid invoices cannot be directly deleted
+    if (invoice.status === "posted" || invoice.status === "paid") {
+      return NextResponse.json(
+        {
+          error: "Accounting Integrity Violation: Posted financial invoices cannot be deleted. You must reverse or cancel them via a Credit Note to maintain the audit trail.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (!evaluatePermission(sec, "invoices", "delete", invoice)) {
+      return NextResponse.json({ error: "Access Denied: You do not have permission to delete this invoice." }, { status: 403 });
+    }
+
+    await prisma.invoice.delete({ where: { id } });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    return NextResponse.json({ error: "Failed to delete invoice" }, { status: 500 });
   }
 }

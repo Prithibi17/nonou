@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
+import { seedStandardRolesForOrg } from "@/core/security/permission-engine";
 
 export async function GET() {
   try {
@@ -53,6 +54,14 @@ export async function GET() {
       });
     }
 
+    // Ensure all 15 standard enterprise roles exist for this organization
+    const rolesCount = await prisma.role.count({
+      where: { organizationId: orgUser.organization.id },
+    });
+    if (rolesCount < 10) {
+      await seedStandardRolesForOrg(prisma, orgUser.organization.id);
+    }
+
     const allOrgs = await prisma.organization.findMany({
       where: {
         organizationUsers: {
@@ -83,6 +92,10 @@ export async function GET() {
       hasOrganization: true,
       activeOrg: orgUser.organization,
       activeBranchId: orgUser.defaultBranchId,
+      department: orgUser.department || "Management",
+      team: orgUser.team || "Core",
+      portalType: orgUser.portalType || null,
+      portalContactId: orgUser.portalContactId || null,
       branches: orgUser.organization.branches,
       role: orgUser.role,
       permissions: orgUser.role?.permissions || [],

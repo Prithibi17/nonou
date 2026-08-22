@@ -106,6 +106,10 @@ model OrganizationUser {
   userId          String
   roleId          String
   defaultBranchId String?
+  department      String?  // Sales, Finance, HR, Operations, Engineering, Support, Management
+  team            String?  // Inside Sales, Key Accounts, Tier 1, etc.
+  portalType      String?  // customer, vendor, null
+  portalContactId String?  // Linked Contact record if portal user
   status          String   @default("active") // active, invited, suspended
   invitedAt       DateTime @default(now())
   joinedAt        DateTime?
@@ -124,7 +128,7 @@ model Role {
   organizationId String
   name           String
   description    String?
-  isSystem       Boolean  @default(false) // Admin, Manager, Member, Viewer
+  isSystem       Boolean  @default(false) // Administrator, General Manager, Sales Manager, etc.
   createdAt      DateTime @default(now())
 
   organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -135,17 +139,22 @@ model Role {
 }
 
 model Permission {
-  id           String  @id @default(uuid())
-  roleId       String
-  module       String  // crm, sales, invoices, products, projects, contacts, settings
-  canView      Boolean @default(true)
-  canCreate    Boolean @default(true)
-  canEdit      Boolean @default(true)
-  canDelete    Boolean @default(false)
-  canExport    Boolean @default(true)
-  canImport    Boolean @default(false)
-  canApprove   Boolean @default(false)
-  canConfigure Boolean @default(false)
+  id                    String  @id @default(uuid())
+  roleId                String
+  module                String  // crm, sales, invoices, products, projects, contacts, settings, automation, hr, inventory, helpdesk
+  canView               Boolean @default(true)
+  canCreate             Boolean @default(true)
+  canEdit               Boolean @default(true)
+  canDelete             Boolean @default(false)
+  canExport             Boolean @default(true)
+  canImport             Boolean @default(false)
+  canApprove            Boolean @default(false)
+  canAssign             Boolean @default(false)
+  canShare              Boolean @default(false)
+  canConfigure          Boolean @default(false)
+  recordScope           String  @default("organization") // own, team, department, branch, organization
+  maxApprovalAmount     Float?  // max monetary threshold user can approve directly (e.g. ₹50,000)
+  fieldRestrictionsJson String? // JSON array of field names that are masked / hidden (e.g. ["costPrice", "salary"])
 
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
@@ -335,6 +344,10 @@ model Contact {
   creditLimit    Float    @default(0)
   tags           String?  // comma separated
   ownerId        String?
+  ownerUserId    String?
+  department     String?
+  team           String?
+  portalUserId   String?  // Linked User ID for Customer/Vendor Portal login
   notes          String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -448,6 +461,9 @@ model Lead {
   probability        Int       @default(10)
   stageId            String
   assignedToId       String?
+  ownerUserId        String?
+  department         String?
+  team               String?
   tags               String?
   notes              String?
   lostReason         String?
@@ -489,6 +505,9 @@ model Quotation {
   termsAndConditions  String?
   signatureUrl        String?
   createdById         String?
+  ownerUserId         String?
+  department          String?
+  team                String?
   convertedToOrderId  String?
   convertedToInvoiceId String?
   createdAt           DateTime  @default(now())
@@ -548,6 +567,9 @@ model Invoice {
   notes          String?
   terms          String?
   createdById    String?
+  ownerUserId    String?
+  department     String?
+  team           String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
@@ -616,6 +638,8 @@ model Project {
   description    String?
   customerId     String?
   managerId      String?
+  department     String?
+  team           String?
   status         String    @default("active") // active, completed, on_hold, cancelled
   startDate      DateTime?
   targetEndDate  DateTime?
@@ -659,6 +683,8 @@ model Task {
   actualHours    Float     @default(0)
   assignedToId   String?
   createdById    String?
+  department     String?
+  team           String?
   tags           String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

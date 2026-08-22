@@ -1,6 +1,41 @@
 export type ViewMode = 'list' | 'kanban' | 'calendar' | 'activity' | 'form' | 'pivot' | 'table';
 
-export type UserRole = 'admin' | 'manager' | 'employee' | 'portal_user' | 'viewer';
+export type UserRole =
+  | 'Administrator / Owner'
+  | 'General Manager'
+  | 'Sales Manager'
+  | 'Sales Employee'
+  | 'Finance Manager'
+  | 'Accountant'
+  | 'HR Manager'
+  | 'Employee'
+  | 'Inventory Manager'
+  | 'Warehouse Staff'
+  | 'Project Manager'
+  | 'Project Member'
+  | 'Helpdesk Manager'
+  | 'Support Agent'
+  | 'Portal Customer'
+  | 'Portal Vendor'
+  | string;
+
+export interface EnterprisePermission {
+  id?: string;
+  module: string;
+  canView: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canApprove: boolean;
+  canAssign: boolean;
+  canShare: boolean;
+  canExport: boolean;
+  canImport: boolean;
+  canConfigure: boolean;
+  recordScope: 'own' | 'team' | 'department' | 'branch' | 'organization';
+  maxApprovalAmount?: number | null;
+  fieldRestrictionsJson?: string | null;
+}
 
 export interface UserSession {
   id: string;
@@ -13,7 +48,16 @@ export interface UserSession {
   organizationSlug: string;
   branchId?: string | null;
   branchName?: string | null;
-  role: string;
+  department?: string | null;
+  team?: string | null;
+  portalType?: string | null;
+  role: {
+    id: string;
+    name: string;
+    description?: string | null;
+    isSystem: boolean;
+  };
+  permissions: EnterprisePermission[];
   currency: string;
   currencySymbol: string;
   dateFormat: string;

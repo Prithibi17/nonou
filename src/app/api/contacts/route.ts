@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getSecurityContext } from "@/lib/auth";
+import { buildPrismaRecordFilter, evaluatePermission } from "@/core/security/permission-engine";
 
 export async function GET(req: Request) {
   try {
@@ -7,11 +9,12 @@ export async function GET(req: Request) {
     const orgId = searchParams.get("orgId");
     const contactId = searchParams.get("id");
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "contacts", "view")) {
+      return NextResponse.json({ error: "Access Denied: You cannot view contacts." }, { status: 403 });
+    }
 
     if (contactId) {
       const contact = await prisma.contact.findUnique({
@@ -26,8 +29,10 @@ export async function GET(req: Request) {
       return NextResponse.json(contact);
     }
 
+    const scopeFilter = buildPrismaRecordFilter(sec, "contacts");
+
     const contacts = await prisma.contact.findMany({
-      where: { organizationId: org.id },
+      where: scopeFilter,
       include: {
         _count: {
           select: { quotations: true, invoices: true, projects: true },
@@ -70,16 +75,17 @@ export async function POST(req: Request) {
       branchId,
     } = body;
 
-    const org = orgId
-      ? await prisma.organization.findUnique({ where: { id: orgId } })
-      : await prisma.organization.findFirst();
+    const sec = await getSecurityContext(orgId);
+    if (!sec) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!org) return NextResponse.json({ error: "Organization not found" }, { status: 404 });
+    if (!evaluatePermission(sec, "contacts", "create")) {
+      return NextResponse.json({ error: "Access Denied: You cannot create contacts." }, { status: 403 });
+    }
 
     const contact = await prisma.contact.create({
       data: {
-        organizationId: org.id,
-        branchId: branchId || null,
+        organizationId: sec.organizationId,
+        branchId: branchId || sec.branchId || null,
         name,
         companyName,
         type: type || "individual",
@@ -99,6 +105,9 @@ export async function POST(req: Request) {
         creditLimit: Number(creditLimit) || 0,
         tags,
         notes,
+        ownerUserId: sec.userId,
+        department: sec.department || null,
+        team: sec.team || null,
       },
     });
 
