@@ -1,0 +1,689 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ----------------------------------------------------
+// 1. MULTI-TENANCY, AUTH & USERS
+// ----------------------------------------------------
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  avatarUrl     String?
+  isSuperAdmin  Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  organizationUsers OrganizationUser[]
+  assignedLeads     Lead[]
+  assignedTasks     Task[]
+  timesheets        Timesheet[]
+  assignedActivities Activity[]
+  comments          Comment[]
+  auditLogs         AuditLog[]
+  savedFilters      SavedFilter[]
+}
+
+model Organization {
+  id              String   @id @default(uuid())
+  name            String
+  slug            String   @unique
+  logo            String?
+  industry        String   @default("General")
+  companySize     String   @default("1-10")
+  country         String   @default("India")
+  state           String?
+  currency        String   @default("INR")
+  currencySymbol  String   @default("₹")
+  timezone        String   @default("Asia/Kolkata")
+  dateFormat      String   @default("DD/MM/YYYY")
+  gstin           String?
+  pan             String?
+  website         String?
+  phone           String?
+  address         String?
+  fiscalYearStart String   @default("04-01")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branches          Branch[]
+  organizationUsers OrganizationUser[]
+  roles             Role[]
+  installedApps     OrganizationApp[]
+  contacts          Contact[]
+  productCategories ProductCategory[]
+  products          Product[]
+  crmStages         CRMStage[]
+  leads             Lead[]
+  quotations        Quotation[]
+  invoices          Invoice[]
+  payments          Payment[]
+  projects          Project[]
+  tasks             Task[]
+  activities        Activity[]
+  comments          Comment[]
+  attachments       Attachment[]
+  auditLogs         AuditLog[]
+  savedFilters      SavedFilter[]
+  automationRules   AutomationRule[]
+  customFields      CustomField[]
+}
+
+model Branch {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  code           String
+  isMain         Boolean  @default(false)
+  address        String?
+  phone          String?
+  email          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts     Contact[]
+  leads        Lead[]
+  quotations   Quotation[]
+  invoices     Invoice[]
+  projects     Project[]
+
+  @@index([organizationId])
+}
+
+model OrganizationUser {
+  id              String   @id @default(uuid())
+  organizationId  String
+  userId          String
+  roleId          String
+  defaultBranchId String?
+  status          String   @default("active") // active, invited, suspended
+  invitedAt       DateTime @default(now())
+  joinedAt        DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  description    String?
+  isSystem       Boolean  @default(false) // Admin, Manager, Member, Viewer
+  createdAt      DateTime @default(now())
+
+  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationUsers OrganizationUser[]
+  permissions       Permission[]
+
+  @@index([organizationId])
+}
+
+model Permission {
+  id           String  @id @default(uuid())
+  roleId       String
+  module       String  // crm, sales, invoices, products, projects, contacts, settings
+  canView      Boolean @default(true)
+  canCreate    Boolean @default(true)
+  canEdit      Boolean @default(true)
+  canDelete    Boolean @default(false)
+  canExport    Boolean @default(true)
+  canImport    Boolean @default(false)
+  canApprove   Boolean @default(false)
+  canConfigure Boolean @default(false)
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, module])
+}
+
+model OrganizationApp {
+  id             String   @id @default(uuid())
+  organizationId String
+  appKey         String   // crm, sales, invoices, products, projects, contacts, inventory, helpdesk, hr
+  isInstalled    Boolean  @default(true)
+  installedAt    DateTime @default(now())
+  settingsJson   String?  // JSON configuration
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, appKey])
+}
+
+// ----------------------------------------------------
+// 2. UNIVERSAL RECORD EXTENSIONS & ENGINES
+// ----------------------------------------------------
+
+model CustomField {
+  id             String   @id @default(uuid())
+  organizationId String
+  modelName      String   // contact, lead, quotation, invoice, product, task, project
+  name           String
+  label          String
+  fieldType      String   // text, textarea, number, currency, date, boolean, select, multiselect, url, email, user_ref
+  isRequired     Boolean  @default(false)
+  defaultValue   String?
+  optionsJson    String?  // JSON array for select choices
+  position       Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  values       CustomFieldValue[]
+
+  @@unique([organizationId, modelName, name])
+}
+
+model CustomFieldValue {
+  id            String @id @default(uuid())
+  customFieldId String
+  recordId      String
+  value         String
+
+  customField CustomField @relation(fields: [customFieldId], references: [id], onDelete: Cascade)
+
+  @@unique([customFieldId, recordId])
+  @@index([recordId])
+}
+
+model Activity {
+  id             String    @id @default(uuid())
+  organizationId String
+  recordType     String    // lead, quotation, invoice, task, contact, project
+  recordId       String
+  activityType   String    // call, meeting, email, follow_up, todo, upload
+  summary        String
+  notes          String?
+  dueDate        DateTime
+  isDone         Boolean   @default(false)
+  doneAt         DateTime?
+  assignedToId   String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  assignedTo   User?        @relation(fields: [assignedToId], references: [id])
+
+  @@index([organizationId, recordType, recordId])
+  @@index([dueDate])
+}
+
+model Comment {
+  id             String   @id @default(uuid())
+  organizationId String
+  recordType     String   // lead, quotation, invoice, task, contact, project
+  recordId       String
+  content        String
+  authorId       String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id])
+
+  @@index([organizationId, recordType, recordId])
+}
+
+model Attachment {
+  id             String   @id @default(uuid())
+  organizationId String
+  recordType     String
+  recordId       String
+  fileName       String
+  fileUrl        String
+  fileSize       Int
+  fileType       String
+  uploadedById   String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, recordType, recordId])
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String
+  recordType     String
+  recordId       String
+  action         String   // create, update, delete, stage_change, status_change, converted
+  fieldName      String?
+  oldValue       String?
+  newValue       String?
+  userId         String?
+  ipAddress      String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, recordType, recordId])
+}
+
+model SavedFilter {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  modelName      String
+  name           String
+  filterJson     String
+  isDefault      Boolean  @default(false)
+  isShared       Boolean  @default(false)
+  isPinned       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([organizationId, modelName])
+}
+
+model AutomationRule {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  modelName      String   // lead, quotation, invoice, task
+  triggerType    String   // record_created, record_updated, field_changed, stage_changed, overdue
+  conditionsJson String   // JSON AST
+  actionsJson    String   // JSON array of actions
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, modelName])
+}
+
+// ----------------------------------------------------
+// 3. CONTACTS & DIRECTORY
+// ----------------------------------------------------
+
+model Contact {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String?
+  type           String   @default("individual") // individual, company
+  name           String
+  companyName    String?
+  email          String?
+  phone          String?
+  mobile         String?
+  isCustomer     Boolean  @default(true)
+  isVendor       Boolean  @default(false)
+  gstin          String?
+  pan            String?
+  website        String?
+  street         String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String   @default("India")
+  creditLimit    Float    @default(0)
+  tags           String?  // comma separated
+  ownerId        String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+  quotations   Quotation[]
+  invoices     Invoice[]
+  payments     Payment[]
+  projects     Project[]
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+// ----------------------------------------------------
+// 4. PRODUCTS & CATALOG
+// ----------------------------------------------------
+
+model ProductCategory {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  parentId       String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products     Product[]
+}
+
+model Product {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  sku            String
+  barcode        String?
+  categoryId     String?
+  productType    String   @default("storable") // storable, service, consumable
+  image          String?
+  sellingPrice   Float    @default(0)
+  costPrice      Float    @default(0)
+  taxRate        Float    @default(18.0) // 18% standard GST
+  hsnCode        String?
+  stockOnHand    Int      @default(0)
+  reorderLevel   Int      @default(5)
+  uom            String   @default("Units") // Units, Hours, Kg, Box
+  description    String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category       ProductCategory? @relation(fields: [categoryId], references: [id])
+  variants       ProductVariant[]
+  quotationLines QuotationLine[]
+  invoiceLines   InvoiceLine[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId])
+}
+
+model ProductVariant {
+  id                  String  @id @default(uuid())
+  productId           String
+  name                String
+  sku                 String
+  barcode             String?
+  extraPrice          Float   @default(0)
+  attributeValuesJson String  // e.g. {"Color": "Black", "Size": "L"}
+  stockOnHand         Int     @default(0)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+}
+
+// ----------------------------------------------------
+// 5. CRM (LEADS & OPPORTUNITIES)
+// ----------------------------------------------------
+
+model CRMStage {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String
+  sequence       Int      @default(0)
+  probability    Int      @default(10) // 0 - 100%
+  isWon          Boolean  @default(false)
+  isLost         Boolean  @default(false)
+  color          String   @default("#6366f1")
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        Lead[]
+
+  @@index([organizationId])
+}
+
+model Lead {
+  id                 String    @id @default(uuid())
+  organizationId     String
+  branchId           String?
+  name               String    // Deal / Opportunity Title
+  companyName        String?
+  contactName        String?
+  email              String?
+  phone              String?
+  source             String    @default("Website") // Website, Referral, Cold Call, LinkedIn, Campaign
+  campaign           String?
+  priority           String    @default("Medium") // Low, Medium, High, Urgent
+  expectedRevenue    Float     @default(0)
+  probability        Int       @default(10)
+  stageId            String
+  assignedToId       String?
+  tags               String?
+  notes              String?
+  lostReason         String?
+  expectedClosing    DateTime?
+  isConverted        Boolean   @default(false)
+  convertedContactId String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  deletedAt          DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?      @relation(fields: [branchId], references: [id])
+  stage        CRMStage     @relation(fields: [stageId], references: [id])
+  assignedTo   User?        @relation(fields: [assignedToId], references: [id])
+
+  @@index([organizationId])
+  @@index([stageId])
+}
+
+// ----------------------------------------------------
+// 6. SALES (QUOTATIONS & ORDERS)
+// ----------------------------------------------------
+
+model Quotation {
+  id                  String    @id @default(uuid())
+  organizationId      String
+  branchId            String?
+  quotationNumber     String    // e.g. QT-2026-0001
+  customerId          String
+  status              String    @default("draft") // draft, sent, approved, confirmed, cancelled, invoiced
+  issueDate           DateTime  @default(now())
+  expiryDate          DateTime?
+  paymentTerms        String    @default("Immediate") // Immediate, 15 Days, 30 Days
+  subtotal            Float     @default(0)
+  taxAmount           Float     @default(0)
+  discountAmount      Float     @default(0)
+  totalAmount         Float     @default(0)
+  notes               String?
+  termsAndConditions  String?
+  signatureUrl        String?
+  createdById         String?
+  convertedToOrderId  String?
+  convertedToInvoiceId String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  deletedAt           DateTime?
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?         @relation(fields: [branchId], references: [id])
+  customer     Contact         @relation(fields: [customerId], references: [id])
+  lines        QuotationLine[]
+  invoices     Invoice[]
+
+  @@unique([organizationId, quotationNumber])
+  @@index([organizationId])
+}
+
+model QuotationLine {
+  id              String  @id @default(uuid())
+  quotationId     String
+  productId       String?
+  description     String
+  quantity        Float   @default(1)
+  unitPrice       Float   @default(0)
+  discountPercent Float   @default(0)
+  taxRate         Float   @default(18.0)
+  taxAmount       Float   @default(0)
+  lineTotal       Float   @default(0)
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product   Product?  @relation(fields: [productId], references: [id])
+}
+
+// ----------------------------------------------------
+// 7. INVOICING & PAYMENTS
+// ----------------------------------------------------
+
+model Invoice {
+  id             String    @id @default(uuid())
+  organizationId String
+  branchId       String?
+  invoiceNumber  String    // e.g. INV-2026-0001
+  customerId     String
+  quotationId    String?
+  status         String    @default("draft") // draft, posted, paid, partial, overdue, cancelled
+  issueDate      DateTime  @default(now())
+  dueDate        DateTime
+  paymentTerms   String    @default("30 Days")
+  subtotal       Float     @default(0)
+  taxAmount      Float     @default(0)
+  cgstAmount     Float     @default(0)
+  sgstAmount     Float     @default(0)
+  igstAmount     Float     @default(0)
+  discountAmount Float     @default(0)
+  totalAmount    Float     @default(0)
+  amountPaid     Float     @default(0)
+  amountDue      Float     @default(0)
+  notes          String?
+  terms          String?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?       @relation(fields: [branchId], references: [id])
+  customer     Contact       @relation(fields: [customerId], references: [id])
+  quotation    Quotation?    @relation(fields: [quotationId], references: [id])
+  lines        InvoiceLine[]
+  payments     Payment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId])
+  @@index([customerId])
+}
+
+model InvoiceLine {
+  id              String  @id @default(uuid())
+  invoiceId       String
+  productId       String?
+  description     String
+  hsnCode         String?
+  quantity        Float   @default(1)
+  unitPrice       Float   @default(0)
+  discountPercent Float   @default(0)
+  taxRate         Float   @default(18.0)
+  taxAmount       Float   @default(0)
+  lineTotal       Float   @default(0)
+
+  invoice Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id              String   @id @default(uuid())
+  organizationId  String
+  invoiceId       String
+  customerId      String
+  paymentNumber   String   // e.g. PAY-2026-0001
+  amount          Float
+  paymentMethod   String   @default("Bank Transfer") // Bank Transfer, UPI, Cash, Card, Cheque
+  referenceNumber String?
+  paymentDate     DateTime @default(now())
+  notes           String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  customer     Contact      @relation(fields: [customerId], references: [id])
+
+  @@index([organizationId])
+  @@index([invoiceId])
+}
+
+// ----------------------------------------------------
+// 8. PROJECTS & TASKS
+// ----------------------------------------------------
+
+model Project {
+  id             String    @id @default(uuid())
+  organizationId String
+  branchId       String?
+  name           String
+  code           String
+  description    String?
+  customerId     String?
+  managerId      String?
+  status         String    @default("active") // active, completed, on_hold, cancelled
+  startDate      DateTime?
+  targetEndDate  DateTime?
+  budget         Float     @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       Branch?        @relation(fields: [branchId], references: [id])
+  customer     Contact?       @relation(fields: [customerId], references: [id])
+  stages       ProjectStage[]
+  tasks        Task[]
+
+  @@index([organizationId])
+}
+
+model ProjectStage {
+  id        String @id @default(uuid())
+  projectId String
+  name      String // Backlog, In Progress, In Review, Done
+  sequence  Int    @default(0)
+  color     String @default("#6366f1")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tasks   Task[]
+}
+
+model Task {
+  id             String    @id @default(uuid())
+  organizationId String
+  projectId      String
+  stageId        String
+  title          String
+  description    String?
+  priority       String    @default("Medium") // Low, Medium, High, Urgent
+  status         String    @default("todo") // todo, in_progress, review, done
+  startDate      DateTime?
+  dueDate        DateTime?
+  estimatedHours Float     @default(0)
+  actualHours    Float     @default(0)
+  assignedToId   String?
+  createdById    String?
+  tags           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  stage        ProjectStage @relation(fields: [stageId], references: [id])
+  assignedTo   User?        @relation(fields: [assignedToId], references: [id])
+  timesheets   Timesheet[]
+
+  @@index([organizationId])
+  @@index([projectId])
+  @@index([stageId])
+}
+
+model Timesheet {
+  id          String   @id @default(uuid())
+  taskId      String
+  userId      String
+  date        DateTime @default(now())
+  hours       Float
+  description String?
+  createdAt   DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+}
