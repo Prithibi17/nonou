@@ -117,20 +117,20 @@ export default function LoginPage() {
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-slate-300">Password</label>
             </div>
-            <div className="relative">
-              <Lock className="absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
+            <div className="relative flex items-center">
+              <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 pointer-events-none" />
               <input
                 type={showPassword ? "text" : "password"}
                 required
                 placeholder="••••••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-slate-700 bg-slate-800/80 pl-10 pr-10 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-brand-500 focus:border-transparent"
+                className="w-full rounded-xl border border-slate-700 bg-slate-800/80 pl-10 pr-11 py-2.5 text-xs text-white placeholder:text-slate-500 focus:outline-brand-500 focus:border-transparent transition-all"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3.5 top-2.5 text-slate-400 hover:text-slate-200 focus:outline-none transition-colors"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700/60 focus:outline-none transition-all z-10"
                 title={showPassword ? "Hide password" : "Show password"}
                 aria-label={showPassword ? "Hide password" : "Show password"}
               >
